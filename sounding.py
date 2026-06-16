@@ -57,7 +57,7 @@ from metpy.units import units
 # Toggle the wind definition in one place.
 USE_VECTOR_MEAN_U = True
 
-CAPE_CANAVERAL_STNM = "72210"  # XMR
+CAPE_CANAVERAL_STNM = "74794"  # XMR
 
 
 # ---------------------------------------------------------------------------
