@@ -69,166 +69,107 @@ CAPE_CANAVERAL_STNM = "74794"  # XMR
 #    Fallback: University of Wyoming via Siphon
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+
+# 1. Fetch sounding from University of Wyoming (via Siphon)
+
+# ---------------------------------------------------------------------------
+
 from datetime import datetime
-from urllib.request import urlopen, Request
-from urllib.error import HTTPError, URLError
 
+CAPE_CANAVERAL_STNM = "74794"  # XMR
 
-CAPE_CANAVERAL_STNM = "74794"  # WMO ID for XMR
-CAPE_CANAVERAL_SPC = "XMR"     # SPC station ID
+def fetch_sounding(year: int, month: int, day: int, preferred_hour: int):
+"""
+Fetch the most recent available XMR sounding.
 
+```
+Tries:
+    preferred hour
+    15Z
+    12Z
+    10Z
+    00Z
 
-def fetch_sounding(year: int, month: int, day: int, hour: int) -> pd.DataFrame:
-    """
-    Retrieve the Cape Canaveral XMR sounding for the given UTC date/hour.
+Returns:
+    df, hour_used
 
-    First tries SPC observed sounding text, which is usually best for
-    current-day real-time use. If SPC is unavailable, falls back to the
-    University of Wyoming archive via Siphon.
-    """
+Raises:
+    RuntimeError if no sounding is available.
+"""
 
-    when = datetime(int(year), int(month), int(day), int(hour))
+candidate_hours = []
 
-    errors = []
+for h in [preferred_hour, 15, 12, 10, 0]:
+    if h not in candidate_hours:
+        candidate_hours.append(h)
+
+errors = []
+
+for hour in candidate_hours:
+
+    when = datetime(
+        int(year),
+        int(month),
+        int(day),
+        int(hour)
+    )
 
     try:
-        return fetch_sounding_spc(when, CAPE_CANAVERAL_SPC)
-    except Exception as exc:
-        errors.append(f"SPC failed: {exc}")
+        df = _fetch_wyoming_sounding(when)
+        return df, hour
 
-    try:
-        return fetch_sounding_wyoming(when, CAPE_CANAVERAL_STNM)
     except Exception as exc:
-        errors.append(f"Wyoming failed: {exc}")
+        errors.append(f"{hour:02d}Z: {exc}")
 
+raise RuntimeError(
+    f"No XMR sounding available for {year}-{month:02d}-{day:02d}\n\n"
+    + "\n".join(errors)
+)
+```
+
+def _fetch_wyoming_sounding(when: datetime) -> pd.DataFrame:
+"""
+Retrieve a single sounding from the Wyoming archive.
+"""
+
+```
+try:
+    from siphon.simplewebservice.wyoming import WyomingUpperAir
+
+except ImportError as exc:
     raise RuntimeError(
-        f"Could not retrieve the {hour:02d}Z sounding for {when:%Y-%m-%d}.\n"
-        + "\n".join(errors)
+        "The 'siphon' package is not installed. "
+        "Add 'siphon' to requirements.txt."
+    ) from exc
+
+try:
+
+    raw = WyomingUpperAir.request_data(
+        when,
+        CAPE_CANAVERAL_STNM
     )
 
+except Exception as exc:
+    raise RuntimeError(
+        f"No data available ({exc})"
+    ) from exc
 
-def fetch_sounding_spc(when: datetime, station: str = "XMR") -> pd.DataFrame:
-    """
-    Fetch SPC observed sounding text.
+df = pd.DataFrame(
+    {
+        "pressure": raw["pressure"].astype(float),
+        "height": raw["height"].astype(float),
+        "temperature": raw["temperature"].astype(float),
+        "dewpoint": raw["dewpoint"].astype(float),
+        "direction": raw["direction"].astype(float),
+        "speed": raw["speed"].astype(float),
+        "u": raw["u_wind"].astype(float),
+        "v": raw["v_wind"].astype(float),
+    }
+)
 
-    URL pattern:
-        https://www.spc.noaa.gov/exper/soundings/YYMMDDHH_OBS/XMR.txt
-    """
+return _clean(df)
 
-    yymmddhh = when.strftime("%y%m%d%H")
-    station = station.upper()
-
-    url = f"https://www.spc.noaa.gov/exper/soundings/{yymmddhh}_OBS/{station}.txt"
-
-    try:
-        req = Request(
-            url,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
-        with urlopen(req, timeout=15) as response:
-            text = response.read().decode("utf-8", errors="ignore")
-    except HTTPError as exc:
-        raise RuntimeError(f"SPC sounding not found at {url} ({exc.code})") from exc
-    except URLError as exc:
-        raise RuntimeError(f"Could not connect to SPC sounding site: {exc}") from exc
-    except Exception as exc:
-        raise RuntimeError(f"Unexpected SPC fetch error: {exc}") from exc
-
-    df = parse_spc_sounding_text(text)
-
-    if df.empty:
-        raise RuntimeError("SPC returned text, but no sounding levels were decoded.")
-
-    return df
-
-
-def parse_spc_sounding_text(text: str) -> pd.DataFrame:
-    """
-    Parse SPC sounding text table into the standard DataFrame schema.
-
-    Expected SPC columns usually include:
-        PRES HGHT TEMP DWPT RELH MIXR DRCT SKNT ...
-    """
-
-    if not text or not text.strip():
-        raise RuntimeError("Empty SPC sounding text.")
-
-    rows = []
-
-    for line in text.splitlines():
-        parts = line.split()
-
-        if len(parts) < 8:
-            continue
-
-        try:
-            pressure = float(parts[0])
-            height = float(parts[1])
-            temperature = float(parts[2])
-            dewpoint = float(parts[3])
-            direction = float(parts[6])
-            speed = float(parts[7])
-        except Exception:
-            continue
-
-        # Filter out bogus/header rows
-        if pressure <= 0 or pressure > 1100:
-            continue
-
-        rows.append(
-            {
-                "pressure": pressure,
-                "height": height,
-                "temperature": temperature,
-                "dewpoint": dewpoint,
-                "direction": direction,
-                "speed": speed,
-            }
-        )
-
-    if not rows:
-        raise RuntimeError("No valid pressure levels found in SPC sounding text.")
-
-    df = pd.DataFrame(rows)
-    df = _add_uv(df)
-    return _clean(df)
-
-
-def fetch_sounding_wyoming(when: datetime, station: str = "74794") -> pd.DataFrame:
-    """
-    Fallback: retrieve XMR sounding from University of Wyoming via Siphon.
-    """
-
-    try:
-        from siphon.simplewebservice.wyoming import WyomingUpperAir
-    except ImportError as exc:
-        raise RuntimeError(
-            "The 'siphon' package is required for Wyoming fallback. "
-            "Add 'siphon' to requirements.txt."
-        ) from exc
-
-    try:
-        raw = WyomingUpperAir.request_data(when, station)
-    except Exception as exc:
-        raise RuntimeError(
-            f"Could not retrieve the {when:%H}Z sounding for "
-            f"{when:%Y-%m-%d} from Wyoming. ({exc})"
-        ) from exc
-
-    df = pd.DataFrame(
-        {
-            "pressure": raw["pressure"].astype(float),
-            "height": raw["height"].astype(float),
-            "temperature": raw["temperature"].astype(float),
-            "dewpoint": raw["dewpoint"].astype(float),
-            "direction": raw["direction"].astype(float),
-            "speed": raw["speed"].astype(float),
-            "u": raw["u_wind"].astype(float),
-            "v": raw["v_wind"].astype(float),
-        }
-    )
-
-    return _clean(df)
 
 # ---------------------------------------------------------------------------
 # 2. Decode a raw WMO TEMP message (TTAA + TTBB)
