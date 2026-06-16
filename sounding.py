@@ -88,12 +88,12 @@ def fetch_sounding(year: int, month: int, day: int, preferred_hour: int):
 
     if preferred_hour == 10:
            fallback_hours = [10, 12, 0]
-       elif preferred_hour == 15:
+    elif preferred_hour == 15:
            fallback_hours = [15, 12, 10, 0]
-       else:
+    else:
            fallback_hours = [preferred_hour, 15, 12, 10, 0]
-
-       for h in fallback_hours:
+           
+           for h in fallback_hours:
               if h not in candidate_hours:
                      candidate_hours.append(h)
 
