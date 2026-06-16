@@ -11,7 +11,7 @@ def main():
   st.header('Sounding Parameters from 10Z')
   col1, col2 = st.columns(2)
   with col1:
-    Thompson_Index = st.number_input('Thompson Index (KI - LI)', -30.0, 60.0, step = 0.1, format= "%.1f")
+    Thompson_Index = st.number_input('Thompson Index (KI - LI)', 0.0, 60.0, step = 0.1, format= "%.1f")
     RH = st.number_input('700-500mb Average RH', 0, 100, step=1)
   with col2:
     #wind_average = st.slider('1000-700mb Average U-Wind Component', -40.0, 40.0, 0.5)
@@ -39,7 +39,7 @@ def main():
   st.header('Sounding Parameters from 15Z')
   col3, col4 = st.columns(2)
   with col3:
-    Thompson_Index_15Z = st.number_input('15Z Thompson Index (KI - LI)', -30.0, 60.0, step = 0.1, format= "%.1f")
+    Thompson_Index_15Z = st.number_input('15Z Thompson Index (KI - LI)', 0.0, 60.0, step = 0.1, format= "%.1f")
     RH_15Z = st.number_input('15Z 700-500mb Average RH', 0, 100, step=1)
     PWAT = st.number_input('PWAT (inches)', 0.00, 5.00, step = 0.01, format = "%.01f")
   with col4:
