@@ -61,115 +61,97 @@ CAPE_CANAVERAL_STNM = "74794"  # XMR
 
 
 # ---------------------------------------------------------------------------
-# 1. Fetch from University of Wyoming (via Siphon)
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# 1. Fetch sounding data
-#    Primary: SPC observed sounding text
-#    Fallback: University of Wyoming via Siphon
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-
 # 1. Fetch sounding from University of Wyoming (via Siphon)
-
 # ---------------------------------------------------------------------------
 
 from datetime import datetime
 
 CAPE_CANAVERAL_STNM = "74794"  # XMR
 
+
 def fetch_sounding(year: int, month: int, day: int, preferred_hour: int):
-"""
-Fetch the most recent available XMR sounding.
+    """
+    Fetch the most recent available XMR sounding.
 
-```
-Tries:
-    preferred hour
-    15Z
-    12Z
-    10Z
-    00Z
+    Tries:
+        preferred hour
+        15Z
+        12Z
+        10Z
+        00Z
 
-Returns:
-    df, hour_used
+    Returns:
+        df, hour_used
+    """
 
-Raises:
-    RuntimeError if no sounding is available.
-"""
+    candidate_hours = []
 
-candidate_hours = []
+    for h in [preferred_hour, 15, 12, 10, 0]:
+        if h not in candidate_hours:
+            candidate_hours.append(h)
 
-for h in [preferred_hour, 15, 12, 10, 0]:
-    if h not in candidate_hours:
-        candidate_hours.append(h)
+    errors = []
 
-errors = []
+    for hour in candidate_hours:
+        when = datetime(
+            int(year),
+            int(month),
+            int(day),
+            int(hour)
+        )
 
-for hour in candidate_hours:
+        try:
+            df = _fetch_wyoming_sounding(when)
+            return df, hour
 
-    when = datetime(
-        int(year),
-        int(month),
-        int(day),
-        int(hour)
+        except Exception as exc:
+            errors.append(f"{hour:02d}Z: {exc}")
+
+    raise RuntimeError(
+        f"No XMR sounding available for {year}-{month:02d}-{day:02d}\n\n"
+        + "\n".join(errors)
     )
 
-    try:
-        df = _fetch_wyoming_sounding(when)
-        return df, hour
-
-    except Exception as exc:
-        errors.append(f"{hour:02d}Z: {exc}")
-
-raise RuntimeError(
-    f"No XMR sounding available for {year}-{month:02d}-{day:02d}\n\n"
-    + "\n".join(errors)
-)
-```
 
 def _fetch_wyoming_sounding(when: datetime) -> pd.DataFrame:
-"""
-Retrieve a single sounding from the Wyoming archive.
-"""
+    """
+    Retrieve a single sounding from the Wyoming archive.
+    """
 
-```
-try:
-    from siphon.simplewebservice.wyoming import WyomingUpperAir
+    try:
+        from siphon.simplewebservice.wyoming import WyomingUpperAir
 
-except ImportError as exc:
-    raise RuntimeError(
-        "The 'siphon' package is not installed. "
-        "Add 'siphon' to requirements.txt."
-    ) from exc
+    except ImportError as exc:
+        raise RuntimeError(
+            "The 'siphon' package is not installed. "
+            "Add 'siphon' to requirements.txt."
+        ) from exc
 
-try:
+    try:
+        raw = WyomingUpperAir.request_data(
+            when,
+            CAPE_CANAVERAL_STNM
+        )
 
-    raw = WyomingUpperAir.request_data(
-        when,
-        CAPE_CANAVERAL_STNM
+    except Exception as exc:
+        raise RuntimeError(
+            f"No data available ({exc})"
+        ) from exc
+
+    df = pd.DataFrame(
+        {
+            "pressure": raw["pressure"].astype(float),
+            "height": raw["height"].astype(float),
+            "temperature": raw["temperature"].astype(float),
+            "dewpoint": raw["dewpoint"].astype(float),
+            "direction": raw["direction"].astype(float),
+            "speed": raw["speed"].astype(float),
+            "u": raw["u_wind"].astype(float),
+            "v": raw["v_wind"].astype(float),
+        }
     )
 
-except Exception as exc:
-    raise RuntimeError(
-        f"No data available ({exc})"
-    ) from exc
-
-df = pd.DataFrame(
-    {
-        "pressure": raw["pressure"].astype(float),
-        "height": raw["height"].astype(float),
-        "temperature": raw["temperature"].astype(float),
-        "dewpoint": raw["dewpoint"].astype(float),
-        "direction": raw["direction"].astype(float),
-        "speed": raw["speed"].astype(float),
-        "u": raw["u_wind"].astype(float),
-        "v": raw["v_wind"].astype(float),
-    }
-)
-
-return df, hour
-
+    return _clean(df)
 
 # ---------------------------------------------------------------------------
 # 2. Decode a raw WMO TEMP message (TTAA + TTBB)
