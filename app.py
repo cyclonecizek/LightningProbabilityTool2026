@@ -1,66 +1,186 @@
-import streamlit as st
+import datetime as dt
+
 import numpy as np
 import pandas as pd
-from prediction import predict, predict_limited, predict_15Z, predict_10Z_updated
+import streamlit as st
+
+from prediction import predict_15Z, predict_10Z_updated
+from sounding import fetch_sounding, parse_wmo_temp, compute_indices
+
+
+def _indices_from_df(df, label):
+    """Compute indices from a sounding DataFrame and show a summary table."""
+    ix = compute_indices(df)
+    st.subheader(f"Computed {label} indices")
+    st.dataframe(
+        pd.DataFrame(
+            {
+                "K-Index": [ix["k_index"]],
+                "Lifted Index": [ix["lifted_index"]],
+                "Thompson Index": [ix["thompson_index"]],
+                "Wind avg (U, kt)": [ix["wind_average"]],
+                "700-500 RH (%)": [ix["rh"]],
+                "PWAT (mm)": [ix["pwat_mm"]],
+            }
+        ).round(2),
+        hide_index=True,
+    )
+    return ix
+
+
+def _run_10Z(thompson, wind_avg, rh):
+    feats = {
+        "Thompson_Index": thompson,
+        "1000-700mb_Average_U-Wind_Component": wind_avg,
+        "700-500mb_Average_RH": rh,
+    }
+    result = predict_10Z_updated(feats)
+    st.header("10Z Output (Version 2.0)")
+    st.header(f"{int(result[0])}%")
+
+
+def _run_15Z(thompson, wind_avg, pwat_mm, rh):
+    feats = {
+        "Thompson_Index": thompson,
+        "1000-700mb_Average_U-Wind_Component": wind_avg,
+        "PWAT": pwat_mm,
+        "700-500mb_Average_RH": rh,
+    }
+    result = predict_15Z(feats)
+    st.header("15Z Output")
+    st.header(f"{int(result[0])}%")
+
 
 def main():
+    st.title("Cape Canaveral Lightning Probability Tool")
 
-  st.title('Cape Canaveral Lightning Probability Tool')
-  
+    mode = st.radio(
+        "How would you like to provide the sounding?",
+        ["Manual entry", "Auto-fetch (Univ. of Wyoming)", "Upload WMO TEMP file"],
+    )
 
-  st.header('Sounding Parameters from 10Z')
-  col1, col2 = st.columns(2)
-  with col1:
-    Thompson_Index = st.number_input('Thompson Index (KI - LI)', 0.0, 60.0, step = 0.1, format= "%.1f")
-    RH = st.number_input('700-500mb Average RH', 0, 100, step=1)
-  with col2:
-    #wind_average = st.slider('1000-700mb Average U-Wind Component', -40.0, 40.0, 0.5)
-    wind_direction = st.number_input('1000-700mb Average Wind Direction', 0, 360, step = 1)
-    wind_speed = st.number_input('1000-700mb Average Wind Speed in kts', 0.0, 100.0, step= 0.1, format= "%.1f")
-  
-  if st.button('Probability of Lightning 10Z'):
-    #result = predict(np.array([[Thompson_Index, wind_average]]))
+    # =====================================================================
+    # MODE 1: MANUAL ENTRY  (original behaviour preserved)
+    # =====================================================================
+    if mode == "Manual entry":
+        st.header("Sounding Parameters from 10Z")
+        col1, col2 = st.columns(2)
+        with col1:
+            ti = st.number_input("Thompson Index (KI - LI)", -30.0, 60.0,
+                                 step=0.1, format="%.1f")
+            rh = st.number_input("700-500mb Average RH", 0, 100, step=1)
+        with col2:
+            wdir = st.number_input("1000-700mb Average Wind Direction",
+                                   0, 360, step=1)
+            wspd = st.number_input("1000-700mb Average Wind Speed in kts",
+                                   0.0, 100.0, step=0.1, format="%.1f")
+        if st.button("Probability of Lightning 10Z"):
+            wind_avg = wspd * np.cos(np.deg2rad(270 - wdir))
+            _run_10Z(ti, wind_avg, rh)
 
-    wind_average = wind_speed * np.cos(np.deg2rad(270-wind_direction))
+        st.header("Sounding Parameters from 15Z")
+        col3, col4 = st.columns(2)
+        with col3:
+            ti15 = st.number_input("15Z Thompson Index (KI - LI)", -30.0, 60.0,
+                                   step=0.1, format="%.1f")
+            rh15 = st.number_input("15Z 700-500mb Average RH", 0, 100, step=1)
+            pwat = st.number_input("PWAT (inches)", 0.00, 5.00,
+                                   step=0.01, format="%.2f")
+        with col4:
+            wdir15 = st.number_input("15Z 1000-700mb Average Wind Direction",
+                                     0, 360, step=1)
+            wspd15 = st.number_input("15Z 1000-700mb Average Wind Speed in kts",
+                                     0.0, 100.0, step=0.1, format="%.1f")
+        if st.button("Probability of Lightning 15Z"):
+            wind_avg15 = wspd15 * np.cos(np.deg2rad(270 - wdir15))
+            _run_15Z(ti15, wind_avg15, pwat * 25.4, rh15)
+        return
 
-    #result = predict(np.array([[Thompson_Index, wind_average, RH]]))
-    #result_limited = predict_limited(np.array([[Thompson_Index, wind_average, RH]]))
-    #result_str = str(int(result[0])) + '%'
-    #st.header('Version 1.0')
-    #st.header(str(int(result[0])) + '%')
-    result_10Z = predict_10Z_updated(np.array([[Thompson_Index, wind_average, RH]]))  
-    st.header('10Z Output (Version 2.0)')
-    st.header(str(int(result_10Z[0])) + '%')
+    # =====================================================================
+    # MODE 2: AUTO-FETCH FROM WYOMING
+    # =====================================================================
+    if mode.startswith("Auto-fetch"):
+        st.header("Auto-fetch Cape Canaveral (XMR / 72210) sounding")
+        c1, c2 = st.columns(2)
+        with c1:
+            the_date = st.date_input("Date (UTC)", dt.date.today())
+        with c2:
+            run = st.selectbox("Model run", ["10Z", "15Z"])
+        # Routine soundings are 00Z/12Z; 10Z/15Z forecasts use the 12Z obs.
+        # Adjust here if your workflow maps runs to obs differently.
+        obs_hour = 12
+        st.caption(
+            "Note: routine soundings are at 00Z/12Z. This fetches the 12Z "
+            "observed sounding to derive the indices for the selected run."
+        )
+
+        if st.button("Fetch and compute"):
+            try:
+                with st.spinner("Contacting University of Wyoming archive..."):
+                    df = fetch_sounding(the_date.year, the_date.month,
+                                        the_date.day, obs_hour)
+                st.success(f"Retrieved sounding with {len(df)} levels.")
+                with st.expander("View raw levels"):
+                    st.dataframe(df, hide_index=True)
+                ix = _indices_from_df(df, run)
+                st.session_state["fetched_ix"] = (run, ix)
+            except RuntimeError as exc:
+                st.error(str(exc))
+
+        # Run the model once indices are available.
+        if "fetched_ix" in st.session_state:
+            run, ix = st.session_state["fetched_ix"]
+            if st.button(f"Probability of Lightning {run}"):
+                if run == "10Z":
+                    _run_10Z(ix["thompson_index"], ix["wind_average"], ix["rh"])
+                else:
+                    _run_15Z(ix["thompson_index"], ix["wind_average"],
+                             ix["pwat_mm"], ix["rh"])
+        return
+
+    # =====================================================================
+    # MODE 3: UPLOAD WMO TEMP FILE
+    # =====================================================================
+    if mode.startswith("Upload"):
+        st.header("Upload a raw WMO TEMP sounding")
+        st.caption(
+            "Paste or upload the bulletin text (TTAA mandatory levels, and "
+            "TTBB significant levels if available — TTBB improves PWAT/RH)."
+        )
+        run = st.selectbox("Model run", ["10Z", "15Z"], key="upload_run")
+
+        uploaded = st.file_uploader("TEMP file (.txt)", type=["txt", "dat"])
+        pasted = st.text_area("...or paste the TEMP message here", height=160)
+
+        if st.button("Decode and compute"):
+            text = ""
+            if uploaded is not None:
+                text = uploaded.read().decode("utf-8", errors="replace")
+            elif pasted.strip():
+                text = pasted
+            if not text.strip():
+                st.warning("Provide a file or paste a TEMP message first.")
+            else:
+                try:
+                    df = parse_wmo_temp(text)
+                    st.success(f"Decoded {len(df)} levels.")
+                    with st.expander("View decoded levels"):
+                        st.dataframe(df, hide_index=True)
+                    ix = _indices_from_df(df, run)
+                    st.session_state["uploaded_ix"] = (run, ix)
+                except RuntimeError as exc:
+                    st.error(str(exc))
+
+        if "uploaded_ix" in st.session_state:
+            run, ix = st.session_state["uploaded_ix"]
+            if st.button(f"Probability of Lightning {run}", key="upload_predict"):
+                if run == "10Z":
+                    _run_10Z(ix["thompson_index"], ix["wind_average"], ix["rh"])
+                else:
+                    _run_15Z(ix["thompson_index"], ix["wind_average"],
+                             ix["pwat_mm"], ix["rh"])
+        return
 
 
-
-
-
-  st.header('Sounding Parameters from 15Z')
-  col3, col4 = st.columns(2)
-  with col3:
-    Thompson_Index_15Z = st.number_input('15Z Thompson Index (KI - LI)', 0.0, 60.0, step = 0.1, format= "%.1f")
-    RH_15Z = st.number_input('15Z 700-500mb Average RH', 0, 100, step=1)
-    PWAT = st.number_input('PWAT (inches)', 0.00, 5.00, step = 0.01, format = "%.01f")
-  with col4:
-    #wind_average = st.slider('15Z 1000-700mb Average U-Wind Component', -40.0, 40.0, 0.5)
-    wind_direction_15Z = st.number_input('15Z 1000-700mb Average Wind Direction', 0, 360, step = 1)
-    wind_speed_15Z = st.number_input('15Z 1000-700mb Average Wind Speed in kts', 0.0, 100.0, step= 0.1, format= "%.1f")
-  
-  if st.button('Probability of Lightning 15Z'):
-    wind_average_15Z = wind_speed_15Z * np.cos(np.deg2rad(270-wind_direction_15Z))
-    PWAT_mm = PWAT * 25.4
-
-    result_15Z = predict_15Z(np.array([[Thompson_Index_15Z, wind_average_15Z, PWAT_mm, RH_15Z]]))
-    #result_limited = predict_limited(np.array([[Thompson_Index, wind_average, RH]]))
-    #result_str = str(int(result[0])) + '%'
-    st.header('15Z Output')
-    st.header(str(int(result_15Z[0])) + '%')
-
-
-if __name__=='__main__': 
+if __name__ == "__main__":
     main()
-  
-
-
-
