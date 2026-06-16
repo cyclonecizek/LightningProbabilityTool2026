@@ -56,7 +56,7 @@ def main():
 
     mode = st.radio(
         "How would you like to provide the sounding?",
-        ["Manual entry", "Auto-fetch (Univ. of Wyoming)", "Upload WMO TEMP file"],
+        ["Manual entry", "Auto-fetch", "Upload WMO TEMP file"],
     )
 
     # =====================================================================
@@ -97,46 +97,87 @@ def main():
         return
 
     # =====================================================================
-    # MODE 2: AUTO-FETCH FROM WYOMING
-    # =====================================================================
-    if mode.startswith("Auto-fetch"):
-        st.header("Auto-fetch Cape Canaveral (XMR / 72210) sounding")
-        c1, c2 = st.columns(2)
-        with c1:
-            the_date = st.date_input("Date (UTC)", dt.date.today())
-        with c2:
-            run = st.selectbox("Model run", ["10Z", "15Z"])
-        # Routine soundings are 00Z/12Z; 10Z/15Z forecasts use the 12Z obs.
-        # Adjust here if your workflow maps runs to obs differently.
-        obs_hour = 12
-        st.caption(
-            "Note: routine soundings are at 00Z/12Z. This fetches the 12Z "
-            "observed sounding to derive the indices for the selected run."
+# MODE 2: AUTO-FETCH XMR SOUNDING
+# =====================================================================
+if mode.startswith("Auto-fetch"):
+    st.header("Auto-fetch Cape Canaveral XMR sounding")
+
+    current_hour = dt.datetime.utcnow().hour
+
+    if 9 <= current_hour <= 12:
+        run = "10Z"
+        obs_hour = 10
+
+    elif 14 <= current_hour <= 16:
+        run = "15Z"
+        obs_hour = 15
+
+    else:
+        st.warning(
+            "Outside operational model windows. "
+            "10Z runs from 09-12Z and 15Z runs from 14-16Z."
         )
-
-        if st.button("Fetch and compute"):
-            try:
-                with st.spinner("Contacting University of Wyoming archive..."):
-                    df = fetch_sounding(the_date.year, the_date.month,
-                                        the_date.day, obs_hour)
-                st.success(f"Retrieved sounding with {len(df)} levels.")
-                with st.expander("View raw levels"):
-                    st.dataframe(df, hide_index=True)
-                ix = _indices_from_df(df, run)
-                st.session_state["fetched_ix"] = (run, ix)
-            except RuntimeError as exc:
-                st.error(str(exc))
-
-        # Run the model once indices are available.
-        if "fetched_ix" in st.session_state:
-            run, ix = st.session_state["fetched_ix"]
-            if st.button(f"Probability of Lightning {run}"):
-                if run == "10Z":
-                    _run_10Z(ix["thompson_index"], ix["wind_average"], ix["rh"])
-                else:
-                    _run_15Z(ix["thompson_index"], ix["wind_average"],
-                             ix["pwat_mm"], ix["rh"])
         return
+
+    st.info(
+        f"Current UTC hour: {current_hour:02d}Z | "
+        f"Selected model: {run} | "
+        f"Preferred sounding: {obs_hour:02d}Z"
+    )
+
+    the_date = st.date_input("Date (UTC)", dt.date.today())
+
+    st.caption(
+        f"This will try to fetch the {obs_hour:02d}Z XMR sounding first. "
+        "If unavailable, it will fall back to nearby available times."
+    )
+
+    if st.button("Fetch and compute"):
+        try:
+            with st.spinner("Fetching XMR sounding..."):
+                df, hour_used = fetch_sounding(
+                    the_date.year,
+                    the_date.month,
+                    the_date.day,
+                    obs_hour
+                )
+
+            st.success(
+                f"Retrieved {hour_used:02d}Z sounding with {len(df)} levels."
+            )
+
+            with st.expander("View raw levels"):
+                st.dataframe(df, hide_index=True)
+
+            ix = _indices_from_df(
+                df,
+                f"{run} using {hour_used:02d}Z sounding"
+            )
+
+            st.session_state["fetched_ix"] = (run, ix)
+
+        except RuntimeError as exc:
+            st.error(str(exc))
+
+    if "fetched_ix" in st.session_state:
+        run, ix = st.session_state["fetched_ix"]
+
+        if st.button(f"Probability of Lightning {run}"):
+            if run == "10Z":
+                _run_10Z(
+                    ix["thompson_index"],
+                    ix["wind_average"],
+                    ix["rh"]
+                )
+            else:
+                _run_15Z(
+                    ix["thompson_index"],
+                    ix["wind_average"],
+                    ix["pwat_mm"],
+                    ix["rh"]
+                )
+
+    return
 
     # =====================================================================
     # MODE 3: UPLOAD WMO TEMP FILE
