@@ -104,32 +104,25 @@ def main():
     if mode.startswith("Auto-fetch"):
         st.header("Auto-fetch Cape Canaveral XMR sounding")
 
-        current_hour = dt.datetime.utcnow().hour
-
-        if 9 <= current_hour <= 12:
-            run = "10Z"
-            obs_hour = 10
-
-        elif 14 <= current_hour <= 16:
-            run = "15Z"
-            obs_hour = 15
-
-        else:
-            st.warning(
-                "Outside operational model windows. "
-                "10Z runs from 09-12Z and 15Z runs from 14-16Z."
-            )
-            return
-
-        st.info(
-            f"Current UTC hour: {current_hour:02d}Z | "
-            f"Selected model: {run} | "
-            f"Preferred sounding: {obs_hour:02d}Z"
+        run = st.selectbox(
+            "Model Run",
+            ["10Z", "15Z"]
         )
 
         the_date = st.date_input(
             "Date (UTC)",
             dt.date.today()
+        )
+
+        obs_hour = st.selectbox(
+            "Preferred Sounding Hour (UTC)",
+            [0, 10, 12, 15],
+            index=3 if run == "15Z" else 1
+        )
+
+        st.info(
+            f"Selected model: {run} | "
+            f"Preferred sounding: {obs_hour:02d}Z"
         )
 
         st.caption(
