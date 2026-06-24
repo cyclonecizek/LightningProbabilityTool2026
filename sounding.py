@@ -299,27 +299,67 @@ def parse_wmo_temp(text: str) -> pd.DataFrame:
                 )
             i += 3
 
-    # ---- TTBB: significant levels (P + T/Td only, no wind) ----
+    # ---- TTBB: significant temperature/dewpoint levels only ----
     if "TTBB" in sections:
         g = sections["TTBB"]
+
+        # Remove trailing equals signs from any groups
+        g = [tok.replace("=", "") for tok in g]
+
+        # Skip the first two header groups when present:
+        # YYGGId and station ID
         i = 0
-        # significant-level groups come in pairs: (nnPPP, TTTDD)
-        # nn is an ordinal indicator (00,11,22,...), PPP the pressure.
+        if len(g) >= 2:
+            i = 2
+
+        # Significant temperature/dewpoint levels come in pairs:
+        #   nnPPP TTTDD
+        #
+        # Stop when we reach 21212, because that begins wind groups.
+        # Also stop at other non-temp section markers.
+        stop_groups = {"21212", "31313", "41414", "51515"}
+
         while i + 1 < len(g):
             idx_grp = g[i]
             td_grp = g[i + 1]
-            if len(idx_grp) == 5 and idx_grp[2:].isdigit():
-                ppp = idx_grp[2:]
+
+            if idx_grp in stop_groups:
+                break
+
+            if td_grp in stop_groups:
+                break
+
+            # Require 5-digit groups
+            if (
+                len(idx_grp) == 5
+                and len(td_grp) == 5
+                and idx_grp.isdigit()
+                and td_grp[:3].isdigit()
+            ):
+                # TTBB significant-level pressure group is nnPPP.
+                # nn is ordinal, PPP is pressure.
+                ppp = idx_grp[2:5]
                 pres = float(ppp)
-                # significant-level pressure: values < ~100 imply +1000 hPa
+
+                # Values less than 100 are above 1000 hPa surface-layer values.
+                # Example: 017 means 1017 hPa.
                 if pres < 100:
                     pres += 1000.0
+
                 temp, dew = _decode_ttaa_temp_dewpoint(td_grp)
+
                 if not np.isnan(temp):
                     rows.append(
-                        dict(pressure=pres, height=np.nan, temperature=temp,
-                             dewpoint=dew, direction=np.nan, speed=np.nan)
+                        dict(
+                            pressure=pres,
+                            height=np.nan,
+                            temperature=temp,
+                            dewpoint=dew,
+                            direction=np.nan,
+                            speed=np.nan,
+                        )
                     )
+
             i += 2
 
     if not rows:
