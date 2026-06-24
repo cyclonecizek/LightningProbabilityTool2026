@@ -231,6 +231,21 @@ def _decode_wind(grp: str):
         return np.nan, np.nan
     return float(direction), float(speed)
 
+def _decode_mandatory_height(pp: str, hhh: str):
+    if not hhh.isdigit():
+        return np.nan
+
+    h = int(hhh)
+
+    if pp in ["99"]:
+        return np.nan
+    elif pp in ["00", "92", "85", "70"]:
+        return float(h)
+    elif pp in ["50", "40", "30"]:
+        return float(h * 10)
+    elif pp in ["25", "20", "15", "10"]:
+        return float(10000 + h * 10)
+    return np.nan
 
 def parse_wmo_temp(text: str) -> pd.DataFrame:
     """
@@ -294,7 +309,7 @@ def parse_wmo_temp(text: str) -> pd.DataFrame:
                 direction, speed = _decode_wind(g[i + 2])
             if pres is not None and not np.isnan(pres):
                 rows.append(
-                    dict(pressure=pres, height=np.nan, temperature=temp,
+                    dict(pressure=pres, height=_decode_mandatory_height(pp, grp[2:5]), temperature=temp,
                          dewpoint=dew, direction=direction, speed=speed)
                 )
             i += 3
@@ -371,7 +386,9 @@ def parse_wmo_temp(text: str) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     # Derive u/v from direction/speed where available.
     df = _add_uv(df)
-    return _clean(df)
+    df = _clean(df)
+    df = _fill_missing_height_wind(df)   
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +418,35 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     )
     return df
 
+def _fill_missing_height_wind(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.sort_values("pressure", ascending=False).reset_index(drop=True)
+
+    x = np.log(df["pressure"].to_numpy(dtype=float))
+
+    for col in ["height", "u", "v"]:
+        good = df[col].notna()
+
+        if good.sum() >= 2:
+            xp = x[good]
+            fp = df.loc[good, col].to_numpy(dtype=float)
+
+            order = np.argsort(xp)
+
+            df[col] = np.interp(
+                x,
+                xp[order],
+                fp[order],
+                left=np.nan,
+                right=np.nan,
+            )
+
+    spd = np.sqrt(df["u"] ** 2 + df["v"] ** 2)
+    direction = (270 - np.degrees(np.arctan2(df["v"], df["u"]))) % 360
+
+    df["speed"] = df["speed"].fillna(spd)
+    df["direction"] = df["direction"].fillna(direction)
+
+    return df
 
 # ---------------------------------------------------------------------------
 # 3. Compute model features
